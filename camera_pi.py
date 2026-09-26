@@ -17,9 +17,9 @@ import threading
 from pathlib import Path
 
 from aiohttp import web, WSMsgType
-from picamera2 import Picamera2
-from picamera2.encoders import MJPEGEncoder, Quality
-from picamera2.outputs import FileOutput
+from picamera2 import Picamera2  # type: ignore[import-untyped]
+from picamera2.encoders import MJPEGEncoder, Quality  # type: ignore[import-untyped]
+from picamera2.outputs import FileOutput  # type: ignore[import-untyped]
 
 RAIZ = Path(__file__).resolve().parent
 
