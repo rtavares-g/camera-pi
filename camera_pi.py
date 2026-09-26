@@ -16,7 +16,6 @@ import os
 import threading
 from pathlib import Path
 
-import jwt
 from aiohttp import web, WSMsgType
 from picamera2 import Picamera2
 from picamera2.encoders import MJPEGEncoder, Quality
@@ -30,11 +29,6 @@ PORTA = int(os.environ.get("CAMERA_PORTA", "8090"))
 LARGURA = int(os.environ.get("CAMERA_LARGURA", "1280"))
 ALTURA = int(os.environ.get("CAMERA_ALTURA", "720"))
 FPS = int(os.environ.get("CAMERA_FPS", "20"))
-# Cloudflare Access: time (ex: "meutime" de meutime.cloudflareaccess.com)
-# e o Application Audience (AUD) Tag da aplicacao. Com os dois definidos,
-# toda requisicao precisa do JWT valido que o Access injeta.
-CF_TEAM = os.environ.get("CF_ACCESS_TEAM", "")
-CF_AUD = os.environ.get("CF_ACCESS_AUD", "")
 
 log = logging.getLogger("camera-pi")
 
@@ -103,45 +97,18 @@ class Camera:
             await asyncio.to_thread(self._desligar)
 
 
-class AccessCloudflare:
-    """Valida o JWT (Cf-Access-Jwt-Assertion) emitido pelo Cloudflare Access."""
-
-    def __init__(self, time: str, aud: str):
-        self.emissor = f"https://{time}.cloudflareaccess.com"
-        self.aud = aud
-        self.chaves = jwt.PyJWKClient(f"{self.emissor}/cdn-cgi/access/certs",
-                                      cache_keys=True, lifespan=3600)
-
-    def _validar(self, token: str) -> dict:
-        chave = self.chaves.get_signing_key_from_jwt(token)
-        return jwt.decode(token, chave.key, algorithms=["RS256"],
-                          audience=self.aud, issuer=self.emissor)
-
-    async def usuario(self, request: web.Request) -> str:
-        token = (request.headers.get("Cf-Access-Jwt-Assertion")
-                 or request.cookies.get("CF_Authorization"))
-        if not token:
-            raise web.HTTPForbidden(text="acesso somente via Cloudflare Access")
-        try:
-            dados = await asyncio.to_thread(self._validar, token)
-        except jwt.PyJWTError as e:
-            log.warning("JWT do Access recusado (%s): %s", request.remote, e)
-            raise web.HTTPForbidden(text="token do Cloudflare Access invalido")
-        return dados.get("email") or dados.get("sub", "?")
-
-
-async def usuario(request: web.Request) -> str:
-    access: AccessCloudflare | None = request.app["access"]
-    return await access.usuario(request) if access else "-"
+def usuario(request: web.Request) -> str:
+    # O login e feito pelo Cloudflare Access antes de chegar aqui; o header
+    # serve so para identificar quem esta assistindo no log.
+    return request.headers.get("Cf-Access-Authenticated-User-Email", "-")
 
 
 async def pagina(request: web.Request):
-    await usuario(request)
     return web.FileResponse(RAIZ / "static" / "index.html")
 
 
 async def websocket(request: web.Request):
-    quem = await usuario(request)
+    quem = usuario(request)
 
     camera: Camera = request.app["camera"]
     ws = web.WebSocketResponse(heartbeat=20)
@@ -188,13 +155,6 @@ def main():
                         format="%(asctime)s %(levelname)s %(message)s")
     app = web.Application()
     app["camera"] = Camera()
-    if CF_TEAM and CF_AUD:
-        app["access"] = AccessCloudflare(CF_TEAM, CF_AUD)
-        log.info("Cloudflare Access ativo (time %s)", CF_TEAM)
-    else:
-        app["access"] = None
-        log.warning("CF_ACCESS_TEAM/CF_ACCESS_AUD nao definidos - "
-                    "sem validacao do Cloudflare Access")
     app.router.add_get("/", pagina)
     app.router.add_get("/ws", websocket)
     app.on_shutdown.append(ao_desligar)
