@@ -1,0 +1,26 @@
+[Unit]
+Description=Visualizacao da camera via WebSocket
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=raspberry
+Group=raspberry
+SupplementaryGroups=video
+
+WorkingDirectory=/home/raspberry/camera-pi
+Environment=PYTHONUNBUFFERED=1
+# Cloudflare Access (Zero Trust > Access > Applications > sua app)
+Environment=CF_ACCESS_TEAM=rtavares
+Environment=CF_ACCESS_AUD=bf41159f83cb2770d33f6bd9f44760e1c36116f6a312e56dd03dd0909532b554
+ExecStart=/home/raspberry/camera-pi/venv/bin/python /home/raspberry/camera-pi/camera_pi.py
+
+Restart=always
+RestartSec=5
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

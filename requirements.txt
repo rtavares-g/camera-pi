@@ -1,0 +1,4 @@
+aiohttp>=3.9
+PyJWT[crypto]>=2.8
+# picamera2 vem do pacote do sistema (python3-picamera2 via apt) - o venv
+# precisa ser criado com --system-site-packages para enxergar
