@@ -5,8 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-User=raspberry
-Group=raspberry
+User=__USER__
+Group=__USER__
 SupplementaryGroups=video
 ExecStart=/usr/local/bin/mediamtx /etc/mediamtx/mediamtx.yml
 Restart=always
