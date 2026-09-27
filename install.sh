@@ -24,7 +24,9 @@ if [ ! -d venv ]; then
 fi
 ./venv/bin/pip install -r requirements.txt
 
-sudo cp mediamtx.service camera-pi.service /etc/systemd/system/
+for servico in mediamtx.service camera-pi.service; do
+    sed -e "s|__USER__|$USER|g" -e "s|__HOME__|$HOME|g" "$servico" | sudo tee "/etc/systemd/system/$servico" > /dev/null
+done
 sudo systemctl daemon-reload
 sudo systemctl enable --now mediamtx camera-pi
 systemctl status mediamtx camera-pi --no-pager

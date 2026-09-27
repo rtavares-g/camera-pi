@@ -5,12 +5,12 @@ Wants=network-online.target mediamtx.service
 
 [Service]
 Type=simple
-User=raspberry
-Group=raspberry
+User=__USER__
+Group=__USER__
 
-WorkingDirectory=/home/raspberry/camera-pi
+WorkingDirectory=__HOME__/camera-pi
 Environment=PYTHONUNBUFFERED=1
-ExecStart=/home/raspberry/camera-pi/venv/bin/python /home/raspberry/camera-pi/camera_pi.py
+ExecStart=__HOME__/camera-pi/venv/bin/python __HOME__/camera-pi/camera_pi.py
 
 Restart=always
 RestartSec=5
