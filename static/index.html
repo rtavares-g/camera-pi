@@ -8,39 +8,52 @@
   html, body { margin: 0; height: 100%; background: #111; color: #ddd;
                font-family: system-ui, sans-serif; }
   body { display: flex; flex-direction: column; }
-  #video { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
-  img { max-width: 100%; max-height: 100%; }
+  #area { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; }
+  video { max-width: 100%; max-height: 100%; background: #000; }
   #barra { display: flex; justify-content: space-between; padding: 6px 12px;
            font-size: 13px; background: #000; }
   .on { color: #4caf50; } .off { color: #f44336; }
 </style>
 </head>
 <body>
-<div id="video"><img id="img" alt="Câmera"></div>
-<div id="barra"><span id="estado" class="off">conectando…</span><span id="fps"></span></div>
+<div id="area"><video id="video" autoplay muted playsinline></video></div>
+<div id="barra"><span id="estado" class="off">conectando…</span><span id="info"></span></div>
+<script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
 <script>
-const img = document.getElementById('img');
+// Vídeo H.264 via HLS do MediaMTX (repassado pelo camera-pi em /cam/).
+const video = document.getElementById('video');
 const estado = document.getElementById('estado');
-const fpsEl = document.getElementById('fps');
-let url = null, frames = 0;
+const info = document.getElementById('info');
+const src = location.pathname.replace(/\/$/, '') + '/cam/index.m3u8';
 
-setInterval(() => { fpsEl.textContent = frames + ' fps'; frames = 0; }, 1000);
+function marcar(texto, ok) { estado.textContent = texto; estado.className = ok ? 'on' : 'off'; }
+
+video.addEventListener('playing', () => marcar('ao vivo', true));
+video.addEventListener('waiting', () => marcar('carregando…', false));
+setInterval(() => {
+  if (video.videoWidth) info.textContent = `${video.videoWidth}×${video.videoHeight}`;
+}, 1000);
 
 function conectar() {
-  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  const ws = new WebSocket(`${proto}://${location.host}${location.pathname.replace(/\/$/, '')}/ws`);
-  ws.binaryType = 'blob';
-  ws.onopen = () => { estado.textContent = 'ao vivo'; estado.className = 'on'; };
-  ws.onmessage = (ev) => {
-    const novo = URL.createObjectURL(ev.data);
-    img.onload = () => { if (url) URL.revokeObjectURL(url); url = novo; };
-    img.src = novo;
-    frames++;
-  };
-  ws.onclose = () => {
-    estado.textContent = 'desconectado — reconectando…'; estado.className = 'off';
-    setTimeout(conectar, 2000);
-  };
+  marcar('conectando…', false);
+  if (window.Hls && Hls.isSupported()) {
+    const hls = new Hls({ lowLatencyMode: true, liveSyncDurationCount: 2 });
+    hls.on(Hls.Events.ERROR, (_, d) => {
+      if (!d.fatal) return;
+      marcar('desconectado — reconectando…', false);
+      hls.destroy();
+      setTimeout(conectar, 2000);
+    });
+    hls.loadSource(src);
+    hls.attachMedia(video);
+  } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+    // Safari / iOS: HLS nativo
+    video.src = src;
+    video.onerror = () => { marcar('desconectado — reconectando…', false); setTimeout(conectar, 2000); };
+  } else {
+    marcar('navegador sem suporte a HLS', false);
+  }
+  video.play().catch(() => {});
 }
 conectar();
 </script>

@@ -1,100 +1,69 @@
 #!/usr/bin/env python3
 """
-Visualizacao da camera do Raspberry Pi via WebSocket.
+Visualizacao da camera do Raspberry Pi + camera na Sinric Pro.
 
-A camera (Picamera2 + encoder MJPEG por hardware) so fica ligada enquanto
-houver alguem conectado. Cada frame JPEG e enviado como mensagem binaria
-para todos os clientes em /ws; a pagina em / desenha os frames num <img>.
+Quem controla a camera e o MediaMTX (/etc/mediamtx/mediamtx.yml, path
+"cam"), que so a liga enquanto houver alguem assistindo. Este servico:
+
+- serve o painel em / e repassa o HLS do MediaMTX em /cam/ (o painel chega
+  aqui pelo Cloudflare Tunnel + Access);
+- conecta na Sinric Pro como dispositivo Camera e responde os pedidos de
+  WebRTC da Alexa/Google Home repassando a oferta SDP para o WHEP do
+  MediaMTX. O video WebRTC vai direto do MediaMTX para o aparelho.
 """
 
 from __future__ import annotations
 
 import asyncio
-import io
+import base64
 import logging
 import os
-import threading
 from pathlib import Path
 
-from aiohttp import web, WSMsgType
-from picamera2 import Picamera2  # type: ignore[import-untyped]
-from picamera2.encoders import MJPEGEncoder, Quality  # type: ignore[import-untyped]
-from picamera2.outputs import FileOutput  # type: ignore[import-untyped]
+import aiohttp
+from aiohttp import web
+from multidict import CIMultiDict
+from sinricpro import SinricPro, SinricProConfig  # type: ignore[import-untyped]
+from sinricpro.devices import SinricProCamera  # type: ignore[import-untyped]
 
 RAIZ = Path(__file__).resolve().parent
+
+
+def carregar_env(caminho: Path) -> None:
+    """Le o .env sem depender de biblioteca externa. Variaveis ja presentes
+    no ambiente vencem o arquivo."""
+    if not caminho.is_file():
+        return
+    for linha in caminho.read_text(encoding="utf-8").splitlines():
+        linha = linha.strip()
+        if not linha or linha.startswith("#") or "=" not in linha:
+            continue
+        chave, _, valor = linha.partition("=")
+        chave = chave.strip()
+        valor = valor.strip().strip('"').strip("'")
+        if chave and chave not in os.environ:
+            os.environ[chave] = valor
+
+
+carregar_env(RAIZ / ".env")
 
 # So localhost: o acesso externo passa pelo Cloudflare Tunnel + Access
 HOST = os.environ.get("CAMERA_HOST", "127.0.0.1")
 PORTA = int(os.environ.get("CAMERA_PORTA", "8090"))
-LARGURA = int(os.environ.get("CAMERA_LARGURA", "1280"))
-ALTURA = int(os.environ.get("CAMERA_ALTURA", "720"))
-FPS = int(os.environ.get("CAMERA_FPS", "20"))
+MEDIAMTX_HLS = os.environ.get("MEDIAMTX_HLS", "http://127.0.0.1:8888")
+MEDIAMTX_WHEP = os.environ.get("MEDIAMTX_WHEP", "http://127.0.0.1:8889/cam/whep")
+
+SINRIC_DEVICE_ID = os.environ.get("SINRIC_DEVICE_ID", "")
+SINRIC_APP_KEY = os.environ.get("SINRIC_APP_KEY", "")
+SINRIC_APP_SECRET = os.environ.get("SINRIC_APP_SECRET", "")
+SINRIC_DEBUG = os.environ.get("SINRIC_DEBUG", "0") == "1"
 
 log = logging.getLogger("camera-pi")
 
-
-class SaidaFrames(io.BufferedIOBase):
-    """Recebe frames do encoder (thread da camera) e entrega ao asyncio."""
-
-    def __init__(self, loop: asyncio.AbstractEventLoop, ao_receber):
-        self.loop = loop
-        self.ao_receber = ao_receber
-
-    def write(self, buf):
-        self.loop.call_soon_threadsafe(self.ao_receber, bytes(buf))
-        return len(buf)
-
-
-class Camera:
-    def __init__(self):
-        self.clientes: set[web.WebSocketResponse] = set()
-        self.picam: Picamera2 | None = None
-        self.lock = threading.Lock()
-        self.ultimo_frame: bytes | None = None
-        self.novo_frame = asyncio.Event()
-
-    def _ligar(self, loop):
-        with self.lock:
-            if self.picam is not None:
-                return
-            picam = Picamera2()
-            picam.configure(picam.create_video_configuration(
-                main={"size": (LARGURA, ALTURA)},
-                controls={"FrameRate": FPS},
-            ))
-            picam.start_recording(
-                MJPEGEncoder(), FileOutput(SaidaFrames(loop, self._frame)),
-                quality=Quality.MEDIUM,
-            )
-            self.picam = picam
-            log.info("Camera ligada (%dx%d @ %d fps)", LARGURA, ALTURA, FPS)
-
-    def _desligar(self):
-        with self.lock:
-            if self.picam is None:
-                return
-            try:
-                self.picam.stop_recording()
-            finally:
-                self.picam.close()
-                self.picam = None
-                self.ultimo_frame = None
-            log.info("Camera desligada (sem clientes)")
-
-    def _frame(self, frame: bytes):
-        self.ultimo_frame = frame
-        self.novo_frame.set()
-        self.novo_frame = asyncio.Event()
-
-    async def entrar(self, ws):
-        self.clientes.add(ws)
-        if len(self.clientes) == 1:
-            await asyncio.to_thread(self._ligar, asyncio.get_running_loop())
-
-    async def sair(self, ws):
-        self.clientes.discard(ws)
-        if not self.clientes:
-            await asyncio.to_thread(self._desligar)
+# Headers que nao devem ser copiados de uma resposta para outra num proxy
+HOP_BY_HOP = {"connection", "keep-alive", "transfer-encoding", "content-length",
+              "content-encoding", "upgrade", "proxy-authenticate",
+              "proxy-authorization", "te", "trailer"}
 
 
 def usuario(request: web.Request) -> str:
@@ -104,60 +73,142 @@ def usuario(request: web.Request) -> str:
 
 
 async def pagina(request: web.Request):
+    log.info("Painel aberto: %s", usuario(request))
     return web.FileResponse(RAIZ / "static" / "index.html")
 
 
-async def websocket(request: web.Request):
-    quem = usuario(request)
-
-    camera: Camera = request.app["camera"]
-    ws = web.WebSocketResponse(heartbeat=20)
-    await ws.prepare(request)
-    log.info("Cliente conectado: %s", quem)
-
+async def hls(request: web.Request):
+    """Repassa /cam/* para o HLS do MediaMTX (inclui a query string, que o
+    Low-Latency HLS usa para segurar a playlist ate a proxima parte)."""
+    sessao: aiohttp.ClientSession = request.app["http"]
+    url = f"{MEDIAMTX_HLS}{request.rel_url}"
     try:
-        await camera.entrar(ws)
-    except Exception as e:
-        log.exception("Falha ao ligar a camera")
-        await ws.close(message=f"erro na camera: {e}".encode()[:120])
-        await camera.sair(ws)
-        return ws
+        async with sessao.get(url, allow_redirects=False,
+                              headers={"Cookie": request.headers.get("Cookie", "")}) as resp:
+            saida = web.StreamResponse(status=resp.status, headers=CIMultiDict(
+                (k, v) for k, v in resp.headers.items() if k.lower() not in HOP_BY_HOP
+            ))
+            await saida.prepare(request)
+            async for bloco in resp.content.iter_chunked(64 * 1024):
+                await saida.write(bloco)
+            await saida.write_eof()
+            return saida
+    except aiohttp.ClientError as e:
+        log.warning("MediaMTX indisponivel (%s)", e)
+        raise web.HTTPBadGateway(text="MediaMTX indisponivel")
 
-    async def enviar():
-        # Sempre manda o frame mais recente; cliente lento pula frames
-        # em vez de acumular fila.
-        while not ws.closed:
-            await camera.novo_frame.wait()
-            frame = camera.ultimo_frame
-            if frame:
-                await ws.send_bytes(frame)
 
-    tarefa = asyncio.create_task(enviar())
-    try:
-        async for msg in ws:
-            if msg.type == WSMsgType.ERROR:
-                break
-    finally:
-        tarefa.cancel()
-        await camera.sair(ws)
-        log.info("Cliente desconectado: %s", quem)
-    return ws
+class Sinric:
+    """Camera na Sinric Pro (SDK oficial sinricpro)."""
+
+    def __init__(self, http: aiohttp.ClientSession):
+        self.http = http
+        self.conectado = False
+
+    @property
+    def configurado(self) -> bool:
+        return bool(SINRIC_DEVICE_ID and SINRIC_APP_KEY and SINRIC_APP_SECRET)
+
+    async def iniciar(self) -> None:
+        if not self.configurado:
+            log.warning("SINRIC: credenciais nao configuradas")
+            return
+
+        camera = SinricProCamera(SINRIC_DEVICE_ID)
+        camera.on_get_webrtc_answer(self._webrtc_answer)
+        camera.on_power_state(self._power_state)
+
+        sinric_pro = SinricPro.get_instance()
+        sinric_pro.on_connected(self._ao_conectar)
+        sinric_pro.on_disconnected(self._ao_desconectar)
+        sinric_pro.add(camera)
+
+        log.info("SINRIC: conectando...")
+        await sinric_pro.begin(SinricProConfig(
+            app_key=SINRIC_APP_KEY,
+            app_secret=SINRIC_APP_SECRET,
+            debug=SINRIC_DEBUG,
+            # O controle local (UDP + mDNS) ja e feito pelos outros servicos
+            # da Sinric neste Pi; a camera so precisa da nuvem.
+            local_control=False,
+            mdns=False,
+        ))
+
+    async def _webrtc_answer(self, device_id: str, oferta: str) -> tuple[bool, str]:
+        log.info("SINRIC: pedido de video WebRTC")
+        sdp = base64.b64decode(oferta)
+        self._log_sdp("oferta", sdp)
+        try:
+            async with self.http.post(
+                MEDIAMTX_WHEP, data=sdp, headers={"Content-Type": "application/sdp"},
+                timeout=aiohttp.ClientTimeout(total=15),
+            ) as resp:
+                corpo = await resp.read()
+                if resp.status != 201:
+                    log.warning("SINRIC: WHEP recusou (%d): %s", resp.status,
+                                corpo[:200].decode(errors="replace"))
+                    return False, ""
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            log.warning("SINRIC: MediaMTX indisponivel (%s)", e)
+            return False, ""
+        self._log_sdp("resposta", corpo)
+        return True, base64.b64encode(corpo).decode()
+
+    @staticmethod
+    def _log_sdp(nome: str, sdp: bytes) -> None:
+        # So as linhas que importam para diagnosticar conexao/codec.
+        linhas = [l for l in sdp.decode(errors="replace").splitlines()
+                  if l.startswith(("a=candidate", "m=", "a=rtpmap", "a=fmtp", "a=ice-options",
+                                   "a=setup", "a=sendonly", "a=recvonly", "a=sendrecv", "c="))]
+        log.debug("SINRIC: SDP %s:\n  %s", nome, "\n  ".join(linhas))
+
+    async def _power_state(self, ligado: bool) -> bool:
+        # A camera liga sozinha sob demanda; so confirmamos o comando.
+        log.info("SINRIC: power %s", "on" if ligado else "off")
+        return True
+
+    def _ao_conectar(self) -> None:
+        self.conectado = True
+        log.info("SINRIC: conectado")
+
+    def _ao_desconectar(self) -> None:
+        self.conectado = False
+        log.warning("SINRIC: desconectado")
+
+    async def vigiar_reconexao(self) -> None:
+        """Contorna um bug do SDK: se a 1a tentativa de reconexao falhar,
+        ele desiste para sempre. Aqui forcamos nova tentativa enquanto a
+        conexao estiver caida."""
+        while True:
+            await asyncio.sleep(30)
+            if not self.configurado or self.conectado:
+                continue
+            sp = SinricPro.get_instance()
+            if sp.websocket and not sp.websocket.is_connected():
+                log.info("SINRIC: sem conexao ha um tempo, forcando nova tentativa")
+                sp.websocket.schedule_reconnect()
+
+
+async def ao_iniciar(app: web.Application):
+    app["http"] = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None, sock_connect=5))
+    sinric = Sinric(app["http"])
+    await sinric.iniciar()
+    app["vigia"] = asyncio.create_task(sinric.vigiar_reconexao())
 
 
 async def ao_desligar(app: web.Application):
-    for ws in list(app["camera"].clientes):
-        await ws.close()
-    await asyncio.to_thread(app["camera"]._desligar)
+    app["vigia"].cancel()
+    await app["http"].close()
 
 
 def main():
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(message)s")
     app = web.Application()
-    app["camera"] = Camera()
     app.router.add_get("/", pagina)
-    app.router.add_get("/ws", websocket)
-    app.on_shutdown.append(ao_desligar)
+    app.router.add_get("/cam/{resto:.*}", hls)
+    app.on_startup.append(ao_iniciar)
+    app.on_cleanup.append(ao_desligar)
     web.run_app(app, host=HOST, port=PORTA, print=None)
 
 

@@ -1,13 +1,12 @@
 [Unit]
-Description=Visualizacao da camera via WebSocket
-After=network-online.target
-Wants=network-online.target
+Description=Painel da camera (HLS do MediaMTX) + camera na Sinric Pro
+After=network-online.target mediamtx.service
+Wants=network-online.target mediamtx.service
 
 [Service]
 Type=simple
 User=raspberry
 Group=raspberry
-SupplementaryGroups=video
 
 WorkingDirectory=/home/raspberry/camera-pi
 Environment=PYTHONUNBUFFERED=1

@@ -1,3 +1,4 @@
 aiohttp>=3.9
-# picamera2 vem do pacote do sistema (python3-picamera2 via apt) - o venv
-# precisa ser criado com --system-site-packages para enxergar
+sinricpro>=6.0.0,<7
+# A camera em si e controlada pelo MediaMTX (/etc/mediamtx), nao por este
+# servico - ver install.sh.

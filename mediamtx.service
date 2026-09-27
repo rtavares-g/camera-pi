@@ -1,0 +1,16 @@
+[Unit]
+Description=MediaMTX - stream da camera (HLS/WebRTC)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=raspberry
+Group=raspberry
+SupplementaryGroups=video
+ExecStart=/usr/local/bin/mediamtx /etc/mediamtx/mediamtx.yml
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

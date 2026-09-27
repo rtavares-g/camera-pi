@@ -1,0 +1,43 @@
+# MediaMTX - camera do Raspberry Pi (ov5647) para o painel camera-quarto
+# (HLS, via camera-pi) e para Alexa/Google Home (WebRTC, via Sinric Pro).
+# Só o que difere do padrão do MediaMTX está aqui.
+
+logLevel: info
+
+# Servidores HTTP só no localhost: o painel chega pelo camera-pi
+# (Cloudflare Tunnel + Access) e a Sinric pelo camera-pi (WHEP).
+rtsp: false
+rtmp: false
+srt: false
+moq: false
+
+hls: true
+hlsAddress: 127.0.0.1:8888
+hlsVariant: lowLatency
+hlsSegmentDuration: 1s
+hlsPartDuration: 200ms
+
+webrtc: true
+webrtcAddress: 127.0.0.1:8889
+# O vídeo WebRTC em si vai direto por UDP para o Echo Show / app,
+# então esta porta precisa ser alcançável na rede local.
+webrtcLocalUDPAddress: :8189
+# Só a rede cabeada (wlan0 é outra rede e lo não serve para ninguém).
+webrtcIPsFromInterfacesList: [eth0]
+# Sem STUN de propósito: o candidato srflx do MediaMTX sai de um socket
+# separado (porta aleatória, fora do 8189) e confunde a escolha do caminho
+# com o servidor da Amazon. O Pi já manda checks pela 8189 e o roteador
+# preserva a porta, então a Amazon aprende o endereço público sozinha.
+
+paths:
+  cam:
+    source: rpiCamera
+    # Câmera só liga quando alguém está assistindo.
+    sourceOnDemand: yes
+    rpiCameraWidth: 1280
+    rpiCameraHeight: 720
+    rpiCameraFPS: 20
+    # IDR a cada 1 s (= FPS): segmentos HLS curtos e início rápido.
+    rpiCameraIDRPeriod: 20
+    rpiCameraBitrate: 2000000
+    rpiCameraH264Profile: baseline
