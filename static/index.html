@@ -16,10 +16,17 @@
   nav { display: flex; gap: 4px; padding: 8px 12px; background: #000; }
   nav a { color: #888; text-decoration: none; padding: 6px 12px; border-radius: 6px; font-size: 14px; }
   nav a.atual { color: #fff; background: #222; }
+  #b-priv { margin-left: auto; background: #333; border: 1px solid #444; color: #ddd; padding: 6px 10px;
+            border-radius: 6px; cursor: pointer; font-size: 14px; }
+  #b-priv.ativo { background: #f44336; border-color: #f44336; color: #fff; }
 </style>
 </head>
 <body>
-<nav><a href="./" class="atual">Ao vivo</a><a href="gravacoes">Gravações</a></nav>
+<nav>
+  <a href="./" class="atual">Ao vivo</a>
+  <a href="gravacoes">Gravações</a>
+  <button id="b-priv" title="Desligar câmera e gravação">🔒 Privacidade</button>
+</nav>
 <div id="area"><video id="video" autoplay muted playsinline></video></div>
 <div id="barra"><span id="estado" class="off">conectando…</span><span id="info"></span></div>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>
@@ -34,9 +41,24 @@ function marcar(texto, ok) { estado.textContent = texto; estado.className = ok ?
 
 video.addEventListener('playing', () => marcar('ao vivo', true));
 video.addEventListener('waiting', () => marcar('carregando…', false));
-setInterval(() => {
+setInterval(async () => {
   if (video.videoWidth) info.textContent = `${video.videoWidth}×${video.videoHeight}`;
-}, 1000);
+  try {
+    const r = await fetch('api/estado');
+    if (r.ok) {
+      const est = await r.json();
+      document.getElementById('b-priv').className = est.config.privacidade ? 'ativo' : '';
+    }
+  } catch {}
+}, 2000);
+document.getElementById('b-priv').onclick = async () => {
+  try {
+    await fetch('api/privacidade', { method: 'POST', 
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ativo: !document.getElementById('b-priv').classList.contains('ativo') })
+    });
+  } catch {}
+};
 
 function conectar() {
   marcar('conectando…', false);

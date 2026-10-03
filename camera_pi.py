@@ -20,6 +20,7 @@ import asyncio
 import base64
 import logging
 import os
+import subprocess
 from pathlib import Path
 
 import aiohttp
@@ -110,6 +111,25 @@ async def api_config(request: web.Request):
     config = g.salvar_config(await request.json())
     log.info("Config de gravacao alterada por %s", usuario(request))
     return web.json_response(config)
+
+
+async def api_privacidade(request: web.Request):
+    """Alterna modo privacidade: desliga câmera e gravação."""
+    g: Gravador = request.app["gravador"]
+    corpo = await request.json()
+    ativar = corpo.get("ativo", True)
+    estado = g.salvar_config({"privacidade": ativar})
+    privado = estado.get("privacidade", False)
+    # Desliga/liga o MediaMTX (que gerencia a câmera e WebRTC)
+    cmd = "stop" if privado else "restart"
+    try:
+        subprocess.run(["sudo", "systemctl", cmd, "mediamtx"], check=True,
+                       capture_output=True, timeout=10)
+        log.info("Privacidade %s por %s (mediamtx %s)", 
+                 "ativada" if privado else "desativada", usuario(request), cmd)
+    except Exception as e:
+        log.warning("Falha ao %s o mediamtx: %s", cmd, e)
+    return web.json_response({"privacidade": privado})
 
 
 async def api_apagar(request: web.Request):
@@ -275,6 +295,7 @@ def main():
     app.router.add_get("/api/gravacoes", api_gravacoes)
     app.router.add_get("/api/estado", api_estado)
     app.router.add_post("/api/config", api_config)
+    app.router.add_post("/api/privacidade", api_privacidade)
     app.router.add_post("/api/apagar", api_apagar)
     app.on_startup.append(ao_iniciar)
     app.on_cleanup.append(ao_desligar)

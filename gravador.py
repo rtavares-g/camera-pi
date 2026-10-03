@@ -97,12 +97,22 @@ class Gravador:
             self.config.update(json.loads(self.arquivo_config.read_text()))
         except (OSError, ValueError):
             pass
+        # Privacidade: bloqueia detector e gravação
+        if self.config.get("privacidade"):
+            self.config["ativo"] = False
 
     def salvar_config(self, novos: dict) -> dict:
         if "ativo" in novos:
             self.config["ativo"] = bool(novos["ativo"])
         if novos.get("sensibilidade") in SENSIBILIDADES:
             self.config["sensibilidade"] = novos["sensibilidade"]
+        if "privacidade" in novos:
+            self.config["privacidade"] = bool(novos["privacidade"])
+            # Privacidade desliga tudo
+            if self.config["privacidade"]:
+                self.config["ativo"] = False
+                if self.evento:
+                    self._fechar_evento()
         self.arquivo_config.write_text(json.dumps(self.config))
         log.info("Config: %s", self.config)
         return self.config
