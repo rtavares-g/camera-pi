@@ -1,12 +1,16 @@
 # MediaMTX - camera do Raspberry Pi (ov5647) para o painel camera-quarto
-# (HLS, via camera-pi) e para Alexa/Google Home (WebRTC, via Sinric Pro).
+# (HLS, via camera-pi), para Alexa/Google Home (WebRTC, via Sinric Pro) e
+# para a gravação por movimento (buffer em RAM + RTSP local, via camera-pi).
 # Só o que difere do padrão do MediaMTX está aqui.
 
 logLevel: info
 
 # Servidores HTTP só no localhost: o painel chega pelo camera-pi
 # (Cloudflare Tunnel + Access) e a Sinric pelo camera-pi (WHEP).
-rtsp: false
+# RTSP só no localhost: o detector de movimento do camera-pi lê por aqui.
+rtsp: true
+rtspAddress: 127.0.0.1:8554
+rtspTransports: [tcp]
 rtmp: false
 srt: false
 moq: false
@@ -32,8 +36,8 @@ webrtcIPsFromInterfacesList: [eth0]
 paths:
   cam:
     source: rpiCamera
-    # Câmera só liga quando alguém está assistindo.
-    sourceOnDemand: yes
+    # Câmera sempre ligada: o detector de movimento precisa dela.
+    sourceOnDemand: no
     rpiCameraWidth: 1280
     rpiCameraHeight: 720
     rpiCameraFPS: 20
@@ -41,3 +45,13 @@ paths:
     rpiCameraIDRPeriod: 20
     rpiCameraBitrate: 2000000
     rpiCameraH264Profile: baseline
+    # Grava sem parar em segmentos curtos num buffer em RAM; o camera-pi
+    # move para o disco só os que têm movimento (com pré-gravação) e apaga
+    # o resto. Assim o cartão SD não sofre com gravação contínua.
+    record: yes
+    recordPath: /dev/shm/camera-pi/%path/%Y-%m-%d_%H-%M-%S-%f
+    recordFormat: fmp4
+    recordPartDuration: 1s
+    recordSegmentDuration: 5s
+    # Quem apaga é o camera-pi.
+    recordDeleteAfter: 0s

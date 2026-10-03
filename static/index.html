@@ -13,9 +13,13 @@
   #barra { display: flex; justify-content: space-between; padding: 6px 12px;
            font-size: 13px; background: #000; }
   .on { color: #4caf50; } .off { color: #f44336; }
+  nav { display: flex; gap: 4px; padding: 8px 12px; background: #000; }
+  nav a { color: #888; text-decoration: none; padding: 6px 12px; border-radius: 6px; font-size: 14px; }
+  nav a.atual { color: #fff; background: #222; }
 </style>
 </head>
 <body>
+<nav><a href="./" class="atual">Ao vivo</a><a href="gravacoes">Gravações</a></nav>
 <div id="area"><video id="video" autoplay muted playsinline></video></div>
 <div id="barra"><span id="estado" class="off">conectando…</span><span id="info"></span></div>
 <script src="https://cdn.jsdelivr.net/npm/hls.js@1/dist/hls.min.js"></script>

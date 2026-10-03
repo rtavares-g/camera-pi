@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Câmera — Gravações</title>
+<style>
+  :root { --fundo: #111; --painel: #1b1b1b; --borda: #2c2c2c; --texto: #ddd; --fraco: #888;
+          --verde: #4caf50; --vermelho: #f44336; --azul: #4a9eff; --amarelo: #ffb300; }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; background: var(--fundo); color: var(--texto);
+               font-family: system-ui, sans-serif; font-size: 14px; }
+  button, select { font: inherit; color: var(--texto); background: #262626; border: 1px solid var(--borda);
+                   border-radius: 6px; padding: 6px 10px; cursor: pointer; }
+  button:hover:not(:disabled) { background: #313131; }
+  button:disabled { opacity: .4; cursor: default; }
+  button.perigo { color: #ff7b72; }
+  button.ativo { background: var(--azul); border-color: var(--azul); color: #fff; }
+
+  /* navegação (igual ao painel ao vivo) */
+  nav { display: flex; align-items: center; gap: 4px; padding: 8px 12px; background: #000;
+        position: sticky; top: 0; z-index: 5; }
+  nav a { color: var(--fraco); text-decoration: none; padding: 6px 12px; border-radius: 6px; }
+  nav a.atual { color: #fff; background: #222; }
+  #status { margin-left: auto; display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .ponto { width: 9px; height: 9px; border-radius: 50%; background: var(--fraco); display: inline-block; }
+  .gravando .ponto { background: var(--vermelho); animation: piscar 1s infinite; }
+  .detectando .ponto { background: var(--verde); }
+  .pausado .ponto { background: var(--amarelo); }
+  @keyframes piscar { 50% { opacity: .2; } }
+  #medidor { width: 60px; height: 6px; background: #333; border-radius: 3px; position: relative; overflow: hidden; }
+  #medidor div { height: 100%; background: var(--verde); width: 0; transition: width .4s; }
+  #medidor span { position: absolute; top: 0; bottom: 0; width: 2px; background: #fff8; }
+
+  main { max-width: 1100px; margin: 0 auto; padding: 12px; }
+
+  /* player */
+  #player { background: #000; border-radius: 8px; overflow: hidden; }
+  video { display: block; width: 100%; aspect-ratio: 16/9; background: #000; }
+  #vazio-player { aspect-ratio: 16/9; display: flex; align-items: center; justify-content: center; color: var(--fraco); }
+  #controles { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px; background: var(--painel); }
+  #titulo { font-weight: 600; margin-right: auto; }
+  #titulo small { color: var(--fraco); font-weight: normal; }
+  label.chk { display: flex; align-items: center; gap: 4px; color: var(--fraco); font-size: 13px; cursor: pointer; }
+
+  /* dias */
+  #dias { display: flex; gap: 6px; overflow-x: auto; padding: 12px 0 8px; scrollbar-width: thin; }
+  #dias button { white-space: nowrap; flex: none; }
+  #dias button small { color: inherit; opacity: .7; }
+
+  /* linha do tempo de 24 h */
+  #linha { position: relative; height: 34px; background: var(--painel); border: 1px solid var(--borda);
+           border-radius: 6px; margin-bottom: 4px; cursor: pointer; }
+  #linha .ev { position: absolute; top: 4px; bottom: 4px; min-width: 3px; border-radius: 2px;
+               background: var(--azul); opacity: .85; }
+  #linha .ev.tocando { background: #fff; opacity: 1; }
+  #linha .agora { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--vermelho); }
+  #horas { position: relative; height: 16px; font-size: 11px; color: var(--fraco); margin-bottom: 8px; }
+  #horas span { position: absolute; transform: translateX(-50%); }
+
+  /* barra de ações */
+  #acoes { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 8px 0; }
+  #resumo { color: var(--fraco); margin-right: auto; }
+
+  /* grade de eventos */
+  #grade { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
+  .card { background: var(--painel); border: 2px solid transparent; border-radius: 8px; overflow: hidden;
+          cursor: pointer; position: relative; }
+  .card:hover { border-color: #444; }
+  .card.tocando { border-color: var(--azul); }
+  .card.marcado { border-color: var(--vermelho); }
+  .card img { display: block; width: 100%; aspect-ratio: 16/9; object-fit: cover; background: #000; }
+  .card .info { display: flex; justify-content: space-between; padding: 5px 7px; font-size: 13px; }
+  .card .info small { color: var(--fraco); }
+  .card .nivel { height: 3px; background: var(--azul); }
+  .card .caixa { position: absolute; top: 6px; left: 6px; width: 22px; height: 22px; border-radius: 4px;
+                 background: #000a; border: 2px solid #fff; display: none; }
+  .selecionando .card .caixa { display: block; }
+  .card.marcado .caixa { background: var(--vermelho); border-color: var(--vermelho); }
+  .card.marcado .caixa::after { content: "✓"; color: #fff; display: block; text-align: center; line-height: 18px; }
+  #nada { color: var(--fraco); text-align: center; padding: 40px 0; }
+
+  /* configurações */
+  #config { margin-top: 20px; padding: 12px; background: var(--painel); border-radius: 8px;
+            display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
+  #config .uso { color: var(--fraco); margin-left: auto; }
+
+  @media (max-width: 600px) {
+    main { padding: 8px; }
+    #status .txt { display: none; }
+    #grade { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+<nav>
+  <a href="./">Ao vivo</a>
+  <a href="gravacoes" class="atual">Gravações</a>
+  <div id="status"><span class="ponto"></span><span class="txt" id="status-txt">…</span>
+    <div id="medidor" title="Movimento agora (a marca é o limite para gravar)"><div></div><span></span></div></div>
+</nav>
+
+<main>
+  <section id="player">
+    <div id="vazio-player">Escolha uma gravação</div>
+    <video id="video" controls playsinline preload="metadata" hidden></video>
+    <div id="controles">
+      <span id="titulo">—</span>
+      <button id="b-ant" title="Gravação anterior (←)">⏮</button>
+      <button id="b-prox" title="Próxima gravação (→)">⏭</button>
+      <button id="b-vel" title="Velocidade">1×</button>
+      <label class="chk" title="Ao terminar, toca a próxima gravação do dia">
+        <input type="checkbox" id="seq" checked> em sequência</label>
+      <button id="b-baixar" title="Baixar o vídeo">⬇ Baixar</button>
+      <button id="b-apagar" class="perigo" title="Apagar esta gravação (Del)">🗑 Apagar</button>
+    </div>
+  </section>
+
+  <div id="dias"></div>
+  <div id="linha" title="Clique para ir à gravação mais próxima"></div>
+  <div id="horas"></div>
+
+  <div id="acoes">
+    <span id="resumo"></span>
+    <button id="b-sel">Selecionar</button>
+    <button id="b-todos" hidden>Todos</button>
+    <button id="b-apagar-sel" class="perigo" hidden disabled>Apagar selecionadas</button>
+    <button id="b-apagar-dia" class="perigo">Apagar o dia</button>
+  </div>
+  <div id="grade"></div>
+  <div id="nada" hidden>Nenhuma gravação.</div>
+
+  <section id="config">
+    <label class="chk" style="color:var(--texto)"><input type="checkbox" id="c-ativo"> Gravar quando houver movimento</label>
+    <label>Sensibilidade
+      <select id="c-sens"><option value="baixa">baixa</option><option value="media">média</option><option value="alta">alta</option></select>
+    </label>
+    <span class="uso" id="uso"></span>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const video = $('video');
+let dias = [];          // [{dia, eventos:[{id, inicio, duracao, pico, tamanho}]}] (mais novo primeiro)
+let diaSel = null;      // 'AAAA-MM-DD'
+let tocando = null;     // id do evento no player
+let selecionando = false;
+const marcados = new Set();
+const velocidades = [1, 2, 4, 8];
+let vel = 0;
+let ultimoEstado = null;
+
+const DIAS_SEMANA = ['dom', 'seg', 'ter', 'qua', 'qui', 'sex', 'sáb'];
+const pad = n => String(n).padStart(2, '0');
+const hora = ts => { const d = new Date(ts * 1000); return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`; };
+const dur = s => s >= 60 ? `${Math.floor(s / 60)}min ${pad(Math.round(s % 60))}s` : `${Math.round(s)}s`;
+const tam = b => b >= 1e9 ? `${(b / 1e9).toFixed(1)} GB` : `${Math.round(b / 1e6)} MB`;
+function nomeDia(dia) {
+  const [a, m, d] = dia.split('-').map(Number);
+  const data = new Date(a, m - 1, d), hoje = new Date();
+  hoje.setHours(0, 0, 0, 0);
+  const diff = Math.round((hoje - data) / 864e5);
+  if (diff === 0) return 'Hoje';
+  if (diff === 1) return 'Ontem';
+  return `${DIAS_SEMANA[data.getDay()]} ${pad(d)}/${pad(m)}`;
+}
+const eventosDoDia = () => (dias.find(d => d.dia === diaSel) || { eventos: [] }).eventos;
+const todosEventos = () => dias.flatMap(d => d.eventos);   // mais novo primeiro
+const achar = id => todosEventos().find(e => e.id === id);
+const url = (id, ext) => `gravacoes/${id}.${ext}`;
+
+async function api(caminho, corpo) {
+  const r = await fetch(caminho, corpo === undefined ? {} : {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corpo) });
+  if (!r.ok) throw new Error(`${caminho}: ${r.status}`);
+  return r.json();
+}
+
+// ---------- dados ----------
+async function carregar() {
+  const r = await api('api/gravacoes');
+  dias = r.dias;
+  if (!dias.some(d => d.dia === diaSel)) diaSel = dias.length ? dias[0].dia : null;
+  for (const id of [...marcados]) if (!achar(id)) marcados.delete(id);
+  mostrarEstado(r.estado);
+  desenhar();
+}
+
+// ---------- desenho ----------
+function desenhar() {
+  // dias
+  $('dias').replaceChildren(...dias.map(d => {
+    const b = document.createElement('button');
+    b.className = d.dia === diaSel ? 'ativo' : '';
+    b.innerHTML = `${nomeDia(d.dia)} <small>(${d.eventos.length})</small>`;
+    b.onclick = () => { diaSel = d.dia; desenhar(); };
+    return b;
+  }));
+
+  const evs = eventosDoDia();
+  $('nada').hidden = evs.length > 0;
+  $('b-apagar-dia').disabled = !evs.length;
+  const total = evs.reduce((s, e) => s + e.duracao, 0);
+  $('resumo').textContent = diaSel ? `${evs.length} gravações · ${dur(total)}` : '';
+
+  // linha do tempo
+  const linha = $('linha');
+  linha.replaceChildren();
+  if (diaSel) {
+    const [a, m, d] = diaSel.split('-').map(Number);
+    const zero = new Date(a, m - 1, d).getTime() / 1000;
+    for (const e of evs) {
+      const div = document.createElement('div');
+      div.className = 'ev' + (e.id === tocando ? ' tocando' : '');
+      div.style.left = `${(e.inicio - zero) / 864}%`;
+      div.style.width = `${e.duracao / 864}%`;
+      div.title = `${hora(e.inicio)} · ${dur(e.duracao)}`;
+      div.onclick = ev => { ev.stopPropagation(); tocar(e.id); };
+      linha.append(div);
+    }
+    const agora = Date.now() / 1000 - zero;
+    if (agora < 86400) {
+      const l = document.createElement('div');
+      l.className = 'agora'; l.style.left = `${agora / 864}%`;
+      linha.append(l);
+    }
+    linha.onclick = ev => {
+      const r = linha.getBoundingClientRect();
+      const t = zero + (ev.clientX - r.left) / r.width * 86400;
+      const perto = evs.reduce((p, e) => !p || Math.abs(e.inicio - t) < Math.abs(p.inicio - t) ? e : p, null);
+      if (perto) tocar(perto.id);
+    };
+  }
+  $('horas').replaceChildren(...[0, 3, 6, 9, 12, 15, 18, 21, 24].map(h => {
+    const s = document.createElement('span');
+    s.style.left = `${h / 24 * 100}%`;
+    if (h === 0) s.style.transform = 'none';
+    if (h === 24) s.style.transform = 'translateX(-100%)';
+    s.textContent = `${pad(h % 24 === 0 && h ? 24 : h)}h`;
+    return s;
+  }));
+
+  // grade
+  const grade = $('grade');
+  grade.className = selecionando ? 'selecionando' : '';
+  const pico = Math.max(0.05, ...evs.map(e => e.pico));
+  grade.replaceChildren(...evs.map(e => {
+    const c = document.createElement('div');
+    c.className = 'card' + (e.id === tocando ? ' tocando' : '') + (marcados.has(e.id) ? ' marcado' : '');
+    c.innerHTML = `<img loading="lazy" src="${url(e.id, 'jpg')}" alt="">
+      <div class="nivel" style="width:${Math.min(100, e.pico / pico * 100)}%"></div>
+      <div class="info"><span>${hora(e.inicio)}</span><small>${dur(e.duracao)}</small></div>
+      <span class="caixa"></span>`;
+    c.onclick = () => {
+      if (selecionando) {
+        marcados.has(e.id) ? marcados.delete(e.id) : marcados.add(e.id);
+        desenhar();
+      } else tocar(e.id);
+    };
+    return c;
+  }));
+
+  // barra de seleção
+  $('b-sel').textContent = selecionando ? 'Cancelar' : 'Selecionar';
+  $('b-todos').hidden = !selecionando;
+  $('b-apagar-sel').hidden = !selecionando;
+  $('b-apagar-sel').disabled = !marcados.size;
+  $('b-apagar-sel').textContent = `Apagar selecionadas (${marcados.size})`;
+  $('b-apagar-dia').hidden = selecionando;
+
+  // player
+  const e = tocando && achar(tocando);
+  $('titulo').innerHTML = e
+    ? `${nomeDia(e.id.split('/')[0])} ${hora(e.inicio)} <small>· ${dur(e.duracao)} · ${tam(e.tamanho)}</small>`
+    : '—';
+  for (const b of ['b-baixar', 'b-apagar']) $(b).disabled = !e;
+  $('b-ant').disabled = !e || !vizinho(-1);
+  $('b-prox').disabled = !e || !vizinho(+1);
+}
+
+// ---------- player ----------
+function tocar(id, auto = true) {
+  const e = achar(id);
+  if (!e) return;
+  tocando = id;
+  diaSel = id.split('/')[0];
+  $('vazio-player').hidden = true;
+  video.hidden = false;
+  video.src = url(id, 'mp4');
+  video.playbackRate = velocidades[vel];
+  if (auto) video.play().catch(() => {});
+  desenhar();
+}
+
+// dir +1 = mais nova (para frente no tempo), -1 = mais antiga
+function vizinho(dir) {
+  const lista = todosEventos();
+  const i = lista.findIndex(e => e.id === tocando);
+  if (i < 0) return null;
+  return lista[i - dir] || null;
+}
+
+video.addEventListener('ended', () => {
+  const p = vizinho(+1);
+  if ($('seq').checked && p) tocar(p.id);
+});
+video.addEventListener('ratechange', () => {
+  // o controle nativo também muda a velocidade
+  const i = velocidades.indexOf(video.playbackRate);
+  $('b-vel').textContent = `${video.playbackRate}×`;
+  if (i >= 0) vel = i;
+});
+$('b-ant').onclick = () => { const p = vizinho(-1); if (p) tocar(p.id); };
+$('b-prox').onclick = () => { const p = vizinho(+1); if (p) tocar(p.id); };
+$('b-vel').onclick = () => { vel = (vel + 1) % velocidades.length; video.playbackRate = velocidades[vel]; };
+$('b-baixar').onclick = () => { if (tocando) location.href = url(tocando, 'mp4') + '?baixar'; };
+$('b-apagar').onclick = async () => {
+  if (!tocando || !confirm('Apagar esta gravação?')) return;
+  const prox = vizinho(+1) || vizinho(-1);
+  const id = tocando;
+  pararPlayer();
+  await apagar({ ids: [id] });
+  if (prox) tocar(prox.id);
+};
+
+function pararPlayer() {
+  tocando = null;
+  video.pause();
+  video.removeAttribute('src');
+  video.load();
+  video.hidden = true;
+  $('vazio-player').hidden = false;
+}
+
+async function apagar(corpo) {
+  try { await api('api/apagar', corpo); }
+  catch (err) { alert('Erro ao apagar: ' + err.message); }
+  if (tocando && corpo.ids?.includes(tocando) || corpo.dia && tocando?.startsWith(corpo.dia)) pararPlayer();
+  await carregar();
+}
+
+// ---------- seleção ----------
+$('b-sel').onclick = () => { selecionando = !selecionando; marcados.clear(); desenhar(); };
+$('b-todos').onclick = () => {
+  const evs = eventosDoDia();
+  const todos = evs.every(e => marcados.has(e.id));
+  evs.forEach(e => todos ? marcados.delete(e.id) : marcados.add(e.id));
+  desenhar();
+};
+$('b-apagar-sel').onclick = async () => {
+  if (!confirm(`Apagar ${marcados.size} gravação(ões)?`)) return;
+  const ids = [...marcados];
+  marcados.clear(); selecionando = false;
+  await apagar({ ids });
+};
+$('b-apagar-dia').onclick = async () => {
+  const n = eventosDoDia().length;
+  if (!diaSel || !confirm(`Apagar TODAS as ${n} gravações de ${nomeDia(diaSel)}?`)) return;
+  await apagar({ dia: diaSel });
+};
+
+document.addEventListener('keydown', ev => {
+  if (ev.target.tagName === 'INPUT' || ev.target.tagName === 'SELECT') return;
+  if (ev.key === 'ArrowRight' && ev.shiftKey) $('b-prox').click();
+  else if (ev.key === 'ArrowLeft' && ev.shiftKey) $('b-ant').click();
+  else if (ev.key === 'Delete') $('b-apagar').click();
+});
+
+// ---------- estado / configurações ----------
+function mostrarEstado(s) {
+  const st = $('status');
+  let txt, cls;
+  if (!s.detector_ok) { txt = 'detector parado'; cls = ''; }
+  else if (s.gravando) { txt = `gravando · ${dur(Date.now() / 1000 - s.gravando_desde)}`; cls = 'gravando'; }
+  else if (!s.config.ativo) { txt = 'gravação pausada'; cls = 'pausado'; }
+  else { txt = 'aguardando movimento'; cls = 'detectando'; }
+  st.className = cls;
+  $('status-txt').textContent = txt;
+  // medidor em escala de raiz para os valores pequenos aparecerem
+  const esc = v => Math.min(100, Math.sqrt(v / 0.1) * 100);
+  $('medidor').firstElementChild.style.width = `${esc(s.movimento)}%`;
+  $('medidor').lastElementChild.style.left = `${esc(s.limiar)}%`;
+  if (document.activeElement !== $('c-ativo')) $('c-ativo').checked = s.config.ativo;
+  if (document.activeElement !== $('c-sens')) $('c-sens').value = s.config.sensibilidade;
+  $('uso').textContent = `${tam(s.ocupado)} gravados · ${tam(s.livre)} livres · mantidas por ${s.retencao_dias} dias`;
+  // terminou uma gravação: atualiza a lista
+  if (ultimoEstado && (ultimoEstado.gravando || ultimoEstado.processando) && !s.gravando && !s.processando)
+    carregar();
+  ultimoEstado = s;
+}
+
+async function sondar() {
+  try { mostrarEstado(await api('api/estado')); }
+  catch { $('status').className = ''; $('status-txt').textContent = 'sem conexão'; }
+}
+
+$('c-ativo').onchange = () => api('api/config', { ativo: $('c-ativo').checked }).then(sondar);
+$('c-sens').onchange = () => api('api/config', { sensibilidade: $('c-sens').value }).then(sondar);
+
+carregar().then(() => {
+  // abre na gravação mais recente, sem tocar
+  const e = eventosDoDia()[0];
+  if (e) tocar(e.id, false);
+});
+setInterval(sondar, 2000);
+setInterval(carregar, 60000);
+</script>
+</body>
+</html>

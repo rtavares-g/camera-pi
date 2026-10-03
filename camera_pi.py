@@ -9,7 +9,9 @@ Quem controla a camera e o MediaMTX (/etc/mediamtx/mediamtx.yml, path
   aqui pelo Cloudflare Tunnel + Access);
 - conecta na Sinric Pro como dispositivo Camera e responde os pedidos de
   WebRTC da Alexa/Google Home repassando a oferta SDP para o WHEP do
-  MediaMTX. O video WebRTC vai direto do MediaMTX para o aparelho.
+  MediaMTX. O video WebRTC vai direto do MediaMTX para o aparelho;
+- grava os eventos de movimento (gravador.py) e serve o painel de
+  gravacoes em /gravacoes, com a API em /api/.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from pathlib import Path
 
 import aiohttp
 from aiohttp import web
+from aiohttp.abc import AbstractAccessLogger
 from multidict import CIMultiDict
 from sinricpro import SinricPro, SinricProConfig  # type: ignore[import-untyped]
 from sinricpro.devices import SinricProCamera  # type: ignore[import-untyped]
@@ -47,6 +50,8 @@ def carregar_env(caminho: Path) -> None:
 
 carregar_env(RAIZ / ".env")
 
+from gravador import Gravador  # noqa: E402  (le o .env no import)
+
 # So localhost: o acesso externo passa pelo Cloudflare Tunnel + Access
 HOST = os.environ.get("CAMERA_HOST", "127.0.0.1")
 PORTA = int(os.environ.get("CAMERA_PORTA", "8090"))
@@ -66,6 +71,16 @@ HOP_BY_HOP = {"connection", "keep-alive", "transfer-encoding", "content-length",
               "proxy-authorization", "te", "trailer"}
 
 
+class AccessLog(AbstractAccessLogger):
+    """So loga o que muda algo ou deu erro: o HLS e o painel de gravacoes
+    fazem varias requisicoes por segundo."""
+
+    def log(self, request, response, time):  # noqa: A002
+        if request.method != "GET" or response.status >= 400:
+            self.logger.info("%s %s %s -> %d (%s)", usuario(request), request.method,
+                             request.path, response.status, f"{time:.2f}s")
+
+
 def usuario(request: web.Request) -> str:
     # O login e feito pelo Cloudflare Access antes de chegar aqui; o header
     # serve so para identificar quem esta assistindo no log.
@@ -75,6 +90,50 @@ def usuario(request: web.Request) -> str:
 async def pagina(request: web.Request):
     log.info("Painel aberto: %s", usuario(request))
     return web.FileResponse(RAIZ / "static" / "index.html")
+
+
+async def pagina_gravacoes(request: web.Request):
+    return web.FileResponse(RAIZ / "static" / "gravacoes.html")
+
+
+async def api_gravacoes(request: web.Request):
+    g: Gravador = request.app["gravador"]
+    return web.json_response({"dias": g.eventos(), "estado": g.estado()})
+
+
+async def api_estado(request: web.Request):
+    return web.json_response(request.app["gravador"].estado())
+
+
+async def api_config(request: web.Request):
+    g: Gravador = request.app["gravador"]
+    config = g.salvar_config(await request.json())
+    log.info("Config de gravacao alterada por %s", usuario(request))
+    return web.json_response(config)
+
+
+async def api_apagar(request: web.Request):
+    """Apaga eventos: {"ids": ["AAAA-MM-DD/HH-MM-SS", ...]} ou {"dia": "AAAA-MM-DD"}."""
+    g: Gravador = request.app["gravador"]
+    corpo = await request.json()
+    ids = list(corpo.get("ids", []))
+    if corpo.get("dia"):
+        ids += [e["id"] for d in g.eventos() if d["dia"] == corpo["dia"] for e in d["eventos"]]
+    apagados = sum(1 for i in ids if isinstance(i, str) and g.apagar(i))
+    log.info("%s apagou %d gravacao(oes)", usuario(request), apagados)
+    return web.json_response({"apagados": apagados})
+
+
+async def arquivo_gravacao(request: web.Request):
+    caminho = Gravador.caminho(f"{request.match_info['dia']}/{request.match_info['hora']}",
+                               request.match_info["ext"])
+    if caminho is None:
+        raise web.HTTPNotFound()
+    headers = {"Cache-Control": "private, max-age=86400"}
+    if "baixar" in request.query:
+        headers["Content-Disposition"] = (
+            f'attachment; filename="camera_{request.match_info["dia"]}_{caminho.name}"')
+    return web.FileResponse(caminho, headers=headers)
 
 
 async def hls(request: web.Request):
@@ -194,10 +253,13 @@ async def ao_iniciar(app: web.Application):
     sinric = Sinric(app["http"])
     await sinric.iniciar()
     app["vigia"] = asyncio.create_task(sinric.vigiar_reconexao())
+    app["gravador"] = Gravador()
+    await app["gravador"].iniciar()
 
 
 async def ao_desligar(app: web.Application):
     app["vigia"].cancel()
+    await app["gravador"].parar()
     await app["http"].close()
 
 
@@ -207,9 +269,16 @@ def main():
     app = web.Application()
     app.router.add_get("/", pagina)
     app.router.add_get("/cam/{resto:.*}", hls)
+    app.router.add_get("/gravacoes", pagina_gravacoes)
+    app.router.add_get(r"/gravacoes/{dia:\d{4}-\d{2}-\d{2}}/{hora:\d{2}-\d{2}-\d{2}}.{ext:mp4|jpg}",
+                       arquivo_gravacao)
+    app.router.add_get("/api/gravacoes", api_gravacoes)
+    app.router.add_get("/api/estado", api_estado)
+    app.router.add_post("/api/config", api_config)
+    app.router.add_post("/api/apagar", api_apagar)
     app.on_startup.append(ao_iniciar)
     app.on_cleanup.append(ao_desligar)
-    web.run_app(app, host=HOST, port=PORTA, print=None)
+    web.run_app(app, host=HOST, port=PORTA, print=None, access_log_class=AccessLog)
 
 
 if __name__ == "__main__":
