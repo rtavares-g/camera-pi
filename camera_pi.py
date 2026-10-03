@@ -22,6 +22,7 @@ import base64
 import logging
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import aiohttp
@@ -165,6 +166,7 @@ async def hls(request: web.Request):
     """Repassa /cam/* para o HLS do MediaMTX (inclui a query string, que o
     Low-Latency HLS usa para segurar a playlist ate a proxima parte)."""
     sessao: aiohttp.ClientSession = request.app["http"]
+    led: Led = request.app["led"]
     url = f"{MEDIAMTX_HLS}{request.rel_url}"
     try:
         async with sessao.get(url, allow_redirects=False,
@@ -176,6 +178,8 @@ async def hls(request: web.Request):
             async for bloco in resp.content.iter_chunked(64 * 1024):
                 await saida.write(bloco)
             await saida.write_eof()
+            if resp.status < 400:
+                led.hls_visto()
             return saida
     except aiohttp.ClientError as e:
         log.warning("MediaMTX indisponivel (%s)", e)
@@ -274,15 +278,23 @@ class Sinric:
 
 
 class Led:
-    """Acende o LED da camera enquanto ha espectadores no MediaMTX. O
-    detector de movimento le por RTSP e a gravacao e interna, entao so
-    contam leitores HLS e WebRTC (painel, Alexa/Google Home)."""
+    """Acende o LED da camera enquanto alguem assiste:
+    - painel (HLS): o player pede partes a cada fracao de segundo por este
+      proxy, entao alguns segundos sem pedido = aba fechada. A sessao HLS do
+      MediaMTX so fecha por inatividade ~40 s depois, tarde demais;
+    - Alexa/Google Home (WebRTC): sessoes na API do MediaMTX.
+    O detector de movimento le por RTSP e nao conta."""
 
-    ESPECTADORES = {"hlsSession", "webRTCSession"}
+    HLS_OCIOSO = 4  # segundos sem pedido HLS para considerar a aba fechada
 
     def __init__(self, http: aiohttp.ClientSession):
         self.http = http
         self.aceso: bool | None = None
+        self.ultimo_hls = float("-inf")
+
+    def hls_visto(self) -> None:
+        self.ultimo_hls = time.monotonic()
+        self.acender(True)
 
     def acender(self, aceso: bool) -> None:
         if aceso == self.aceso:
@@ -303,17 +315,18 @@ class Led:
                 return 0
             r.raise_for_status()
             leitores = (await r.json()).get("readers") or []
-        return sum(1 for l in leitores if l.get("type") in self.ESPECTADORES)
+        return sum(1 for l in leitores if l.get("type") == "webRTCSession")
 
     async def vigiar(self):
         while True:
             try:
-                self.acender(await self.espectadores() > 0)
+                assistindo_hls = time.monotonic() - self.ultimo_hls < self.HLS_OCIOSO
+                self.acender(assistindo_hls or await self.espectadores() > 0)
             except Exception as e:  # MediaMTX reiniciando, privacidade...
                 if self.aceso:
                     log.info("LED: sem resposta do MediaMTX (%s)", e)
                 self.acender(False)
-            await asyncio.sleep(2)
+            await asyncio.sleep(1)
 
 
 async def ao_iniciar(app: web.Application):
