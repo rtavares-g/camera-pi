@@ -8,6 +8,10 @@ Type=simple
 User=__USER__
 Group=__USER__
 SupplementaryGroups=video
+# Modo privacidade (painel de gravações) mantém a câmera desligada, inclusive
+# depois de um reboot ou quando o camera-pi sobe e puxa este serviço (Wants=).
+# ExecCondition com saída 1 só pula o start, sem marcar falha.
+ExecCondition=/usr/bin/python3 -c "import json,sys,pathlib; p=pathlib.Path(sys.argv[1]); sys.exit(1 if p.is_file() and json.loads(p.read_text()).get('privacidade') else 0)" __HOME__/camera-gravacoes/config.json
 ExecStart=/usr/local/bin/mediamtx /etc/mediamtx/mediamtx.yml
 Restart=always
 RestartSec=5
