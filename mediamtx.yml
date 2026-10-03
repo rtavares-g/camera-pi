@@ -15,6 +15,11 @@ rtmp: false
 srt: false
 moq: false
 
+# API só no localhost: o camera-pi consulta quem está assistindo para
+# acender o LED da câmera (o padrão já libera a API só para 127.0.0.1).
+api: true
+apiAddress: 127.0.0.1:9997
+
 hls: true
 hlsAddress: 127.0.0.1:8888
 hlsVariant: lowLatency

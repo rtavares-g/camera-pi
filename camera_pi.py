@@ -11,7 +11,8 @@ Quem controla a camera e o MediaMTX (/etc/mediamtx/mediamtx.yml, path
   WebRTC da Alexa/Google Home repassando a oferta SDP para o WHEP do
   MediaMTX. O video WebRTC vai direto do MediaMTX para o aparelho;
 - grava os eventos de movimento (gravador.py) e serve o painel de
-  gravacoes em /gravacoes, com a API em /api/.
+  gravacoes em /gravacoes, com a API em /api/;
+- acende o LED vermelho da camera enquanto alguem assiste (HLS ou WebRTC).
 """
 
 from __future__ import annotations
@@ -58,6 +59,10 @@ HOST = os.environ.get("CAMERA_HOST", "127.0.0.1")
 PORTA = int(os.environ.get("CAMERA_PORTA", "8090"))
 MEDIAMTX_HLS = os.environ.get("MEDIAMTX_HLS", "http://127.0.0.1:8888")
 MEDIAMTX_WHEP = os.environ.get("MEDIAMTX_WHEP", "http://127.0.0.1:8889/cam/whep")
+MEDIAMTX_API = os.environ.get("MEDIAMTX_API", "http://127.0.0.1:9997")
+# LED da camera (ov5647): linha CAM_GPIO1 do expansor de GPIO do Pi 3B+
+LED_CHIP = os.environ.get("CAMERA_LED_CHIP", "gpiochip1")
+LED_LINHA = os.environ.get("CAMERA_LED_LINHA", "6")
 
 SINRIC_DEVICE_ID = os.environ.get("SINRIC_DEVICE_ID", "")
 SINRIC_APP_KEY = os.environ.get("SINRIC_APP_KEY", "")
@@ -268,17 +273,64 @@ class Sinric:
                 sp.websocket.schedule_reconnect()
 
 
+class Led:
+    """Acende o LED da camera enquanto ha espectadores no MediaMTX. O
+    detector de movimento le por RTSP e a gravacao e interna, entao so
+    contam leitores HLS e WebRTC (painel, Alexa/Google Home)."""
+
+    ESPECTADORES = {"hlsSession", "webRTCSession"}
+
+    def __init__(self, http: aiohttp.ClientSession):
+        self.http = http
+        self.aceso: bool | None = None
+
+    def acender(self, aceso: bool) -> None:
+        if aceso == self.aceso:
+            return
+        # -t 0: aplica o valor e sai; o expansor mantem o estado
+        r = subprocess.run(["gpioset", "-t", "0", "-c", LED_CHIP, f"{LED_LINHA}={int(aceso)}"],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            log.warning("LED: gpioset falhou: %s", r.stderr.strip())
+            return
+        self.aceso = aceso
+        log.info("LED da camera %s", "aceso" if aceso else "apagado")
+
+    async def espectadores(self) -> int:
+        async with self.http.get(f"{MEDIAMTX_API}/v3/paths/get/cam",
+                                 timeout=aiohttp.ClientTimeout(total=3)) as r:
+            if r.status == 404:  # camera parada (privacidade)
+                return 0
+            r.raise_for_status()
+            leitores = (await r.json()).get("readers") or []
+        return sum(1 for l in leitores if l.get("type") in self.ESPECTADORES)
+
+    async def vigiar(self):
+        while True:
+            try:
+                self.acender(await self.espectadores() > 0)
+            except Exception as e:  # MediaMTX reiniciando, privacidade...
+                if self.aceso:
+                    log.info("LED: sem resposta do MediaMTX (%s)", e)
+                self.acender(False)
+            await asyncio.sleep(2)
+
+
 async def ao_iniciar(app: web.Application):
     app["http"] = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=None, sock_connect=5))
     sinric = Sinric(app["http"])
     await sinric.iniciar()
     app["vigia"] = asyncio.create_task(sinric.vigiar_reconexao())
+    app["led"] = Led(app["http"])
+    app["vigia_led"] = asyncio.create_task(app["led"].vigiar())
     app["gravador"] = Gravador()
     await app["gravador"].iniciar()
 
 
 async def ao_desligar(app: web.Application):
     app["vigia"].cancel()
+    app["vigia_led"].cancel()
+    app["led"].acender(False)
     await app["gravador"].parar()
     await app["http"].close()
 
