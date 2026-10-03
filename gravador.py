@@ -324,6 +324,12 @@ class Gravador:
             e = eventos.pop(0)
             log.warning("Disco cheio: apagando %s", e["id"])
             self.apagar(e["id"])
+        # Pastas de dia vazias. Nao mexe enquanto ha evento sendo juntado: o
+        # _finalizar cria a pasta antes do ffmpeg escrever nela.
+        if not self.finalizando:
+            for pasta in GRAVACOES_DIR.iterdir():
+                if pasta.is_dir() and RE_DIA.match(pasta.name) and not any(pasta.iterdir()):
+                    pasta.rmdir()
 
     # ---------- consulta / gerencia (usado pela API) ----------
 
@@ -352,8 +358,6 @@ class Gravador:
                 })
             if lista:
                 dias.append({"dia": pasta.name, "eventos": lista})
-            else:
-                shutil.rmtree(pasta, ignore_errors=True)
         return dias
 
     @staticmethod
