@@ -107,12 +107,17 @@ class Gravador:
         if novos.get("sensibilidade") in SENSIBILIDADES:
             self.config["sensibilidade"] = novos["sensibilidade"]
         if "privacidade" in novos:
+            antes = self.config.get("privacidade", False)
             self.config["privacidade"] = bool(novos["privacidade"])
-            # Privacidade desliga tudo
+            # Privacidade desliga tudo; ao sair, volta o "ativo" de antes
             if self.config["privacidade"]:
+                if not antes:
+                    self.config["ativo_antes_privacidade"] = self.config["ativo"]
                 self.config["ativo"] = False
                 if self.evento:
                     self._fechar_evento()
+            elif antes:
+                self.config["ativo"] = self.config.pop("ativo_antes_privacidade", True)
         self.arquivo_config.write_text(json.dumps(self.config))
         log.info("Config: %s", self.config)
         return self.config
