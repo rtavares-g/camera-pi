@@ -1,24 +1,47 @@
 # MediaMTX - camera do Raspberry Pi (ov5647) para o painel camera-quarto
-# (HLS, via camera-pi), para Alexa/Google Home (WebRTC, via Sinric Pro) e
-# para a gravação por movimento (buffer em RAM + RTSP local, via camera-pi).
+# (HLS, via camera-pi), para o Home Assistant (RTSP; Alexa/Google pelo HA)
+# e para a gravação por movimento (buffer em RAM + RTSP local, via camera-pi).
 # Só o que difere do padrão do MediaMTX está aqui.
 
 logLevel: info
 
 # Servidores HTTP só no localhost: o painel chega pelo camera-pi
-# (Cloudflare Tunnel + Access) e a Sinric pelo camera-pi (WHEP).
-# RTSP só no localhost: o detector de movimento do camera-pi lê por aqui.
+# (Cloudflare Tunnel + Access).
+# RTSP na rede local: o detector de movimento do camera-pi lê pelo
+# localhost e o Home Assistant pela rede, com usuário e senha próprios
+# (ver authInternalUsers; o install.sh preenche os __HA_...__).
 rtsp: true
-rtspAddress: 127.0.0.1:8554
+rtspAddress: :8554
 rtspTransports: [tcp]
 rtmp: false
 srt: false
 moq: false
 
 # API só no localhost: o camera-pi consulta quem está assistindo para
-# acender o LED da câmera (o padrão já libera a API só para 127.0.0.1).
+# acender o LED da câmera.
 api: true
 apiAddress: 127.0.0.1:9997
+
+# Localhost pode tudo (camera-pi: detector, HLS do painel, API do LED).
+# O Home Assistant só lê o path "cam", só do IP dele e com senha.
+authMethod: internal
+authInternalUsers:
+  - user: any
+    pass:
+    ips: ['127.0.0.1', '::1']
+    permissions:
+      - action: publish
+      - action: read
+      - action: playback
+      - action: api
+      - action: metrics
+      - action: pprof
+  - user: __HA_RTSP_USUARIO__
+    pass: __HA_RTSP_SENHA__
+    ips: ['__HA_IP__']
+    permissions:
+      - action: read
+        path: cam
 
 hls: true
 hlsAddress: 127.0.0.1:8888
@@ -26,17 +49,9 @@ hlsVariant: lowLatency
 hlsSegmentDuration: 1s
 hlsPartDuration: 200ms
 
-webrtc: true
-webrtcAddress: 127.0.0.1:8889
-# O vídeo WebRTC em si vai direto por UDP para o Echo Show / app,
-# então esta porta precisa ser alcançável na rede local.
-webrtcLocalUDPAddress: :8189
-# Só a rede cabeada (wlan0 é outra rede e lo não serve para ninguém).
-webrtcIPsFromInterfacesList: [eth0]
-# Sem STUN de propósito: o candidato srflx do MediaMTX sai de um socket
-# separado (porta aleatória, fora do 8189) e confunde a escolha do caminho
-# com o servidor da Amazon. O Pi já manda checks pela 8189 e o roteador
-# preserva a porta, então a Amazon aprende o endereço público sozinha.
+# WebRTC era só para a Sinric (Alexa/Google); agora eles chegam pelo
+# Home Assistant, que lê por RTSP.
+webrtc: false
 
 paths:
   cam:
