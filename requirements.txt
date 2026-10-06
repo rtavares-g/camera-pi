@@ -1,4 +1,3 @@
 aiohttp>=3.9
-sinricpro>=6.0.0,<7
 # A camera em si e controlada pelo MediaMTX (/etc/mediamtx), nao por este
 # servico - ver install.sh.
